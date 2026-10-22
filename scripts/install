@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Install (or re-install) this component into an avatar.
+#
+#   scripts/install <avatar-dir> [--dry-run]
+#
+# Re-runnable: it is also how an avatar picks up a fixed component.
+set -euo pipefail
+
+SRC="$(cd "$(dirname "$0")/.." && pwd)"
+AV="${1:?usage: install <avatar-dir> [--dry-run]}"
+DRY=0; [[ "${2:-}" == "--dry-run" ]] && DRY=1
+[[ -d "$AV/harness" ]] || { echo "install: no harness/ in $AV -- is this an avatar?" >&2; exit 1; }
+
+run() { (( DRY )) && { echo "  $*"; return; }; "$@"; }
+
+run mkdir -p "$AV/tools/github-app" "$AV/skills/github-app"
+run cp "$SRC/bin/gh-app"                  "$AV/tools/github-app/gh-app"
+run cp "$SRC/skills/github-app/SKILL.md"  "$AV/skills/github-app/SKILL.md"
+
+# The symlink is resolved INSIDE the container, so it points at the container
+# path. A harness is anything with an entrypoint.sh (see atlassian-query's
+# install for why not home/).
+for h in "$AV"/harness/*; do
+    [[ -f "$h/entrypoint.sh" ]] || continue
+    run mkdir -p "$h/home/.local/bin"
+    run ln -sfn /project/tools/github-app/gh-app "$h/home/.local/bin/gh-app"
+    echo "  linked $(basename "$h"):  gh-app"
+done
+# skills/ needs no link: register-skills symlinks it into each harness at boot.
+
+# Four variables, all from pass, so the config describes the app completely and
+# gh-app checks each against what GitHub reports.
+for v in GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY GITHUB_APP_NAME GITHUB_APP_ORG; do
+    grep -q "$v=" "$AV/harness/config" 2>/dev/null \
+        || echo "  TODO: add \"$v=pass:<app-entry>/<field>\" to SANDBOX_SECRETS in $AV/harness/config"
+done
+
+echo "install: done$( (( DRY )) && echo ' (dry run)'). Next: git add + commit in the avatar,"
+echo "then RELOAD the avatar -- not restart: secrets are baked in at container"
+echo "creation, so ./launch-agent <harness> reload is what picks up a new one."
+echo "Then inside it: gh-app check   (app, org, reach, permissions -- never the token)"
